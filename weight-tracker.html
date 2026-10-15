@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Weight Log</title>
+<style>
+:root{color-scheme:dark;--bg:#14161a;--p:#1b1e24;--p2:#242831;--l:#30353f;--t:#e8e5de;--m:#8e939d;--a:#8fc79a;--w:#e2b765;--r:#e07b7b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--t);font:14px/1.45 system-ui,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums}
+header{position:sticky;top:0;z-index:5;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 14px;background:var(--p);border-bottom:1px solid var(--l)}
+header b{font-size:15px;margin-right:6px}nav{display:flex;gap:2px;flex:1;flex-wrap:wrap}
+nav button{background:none;border:0;color:var(--m);padding:6px 10px}nav button.on{background:var(--p2);color:var(--t)}
+main{max-width:900px;margin:0 auto;padding:14px}
+button{font:inherit;background:var(--p2);color:var(--t);border:1px solid var(--l);border-radius:5px;padding:5px 10px;cursor:pointer}
+button:hover{border-color:var(--m)}button.pri{background:var(--a);color:#101510;border-color:var(--a);font-weight:600}button.danger{color:var(--r)}
+input,select,textarea{font:inherit;background:var(--bg);color:var(--t);border:1px solid var(--l);border-radius:4px;padding:5px 7px;min-width:0}
+:focus-visible{outline:2px solid var(--a);outline-offset:1px}
+h2{margin:4px 0 12px;font-size:20px}h4{margin:14px 0 6px;font-size:14px;color:var(--m);font-weight:600}
+.m{color:var(--m)}.big{font-size:24px;margin:2px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.box{background:var(--p);border:1px solid var(--l);border-radius:6px;padding:12px}.box small{color:var(--m);display:block}
+.row{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}.sp{flex:1}label.f{display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--m)}
+.up{color:var(--w)}.down{color:var(--a)}.empty{text-align:center;padding:50px 10px}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:4px 6px;border-bottom:1px solid var(--l)}th{color:var(--m);font-weight:600}
+td input{width:100%}.scroll{overflow-x:auto}svg.chart{width:100%;background:var(--p);border:1px solid var(--l);border-radius:6px}
+.danger-zone{border:1px solid var(--r);border-radius:6px;padding:12px;margin-top:30px}
+</style></head><body>
+<header><b>Weight Log</b><nav id="nav"></nav><span id="st" class="m">Not saved yet</span></header>
+<main id="main"></main><input type="file" id="file" accept=".json,application/json" hidden>
+<script>
+'use strict';
+/* ===== 1. SCHEMA =====
+ data = { version:1, settings:{unit:'kg'|'lb', goal:number|null},
+          entries:[{id,date:'YYYY-MM-DD',weight:number,note,createdAt,updatedAt}] }
+ Multiple entries per date are allowed. Future fields (bodyfat, waist, time...) can be added to entries via migrate(). */
+const KEY='personalWeightTracker',MON='Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec'.split(' ');
+let S,ui={view:'dash',range:90,q1:'',q2:''};
+const $=s=>document.querySelector(s);
+const uid=()=>Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-4),now=()=>new Date().toISOString();
+const today=()=>{const d=new Date();return new Date(d-d.getTimezoneOffset()*6e4).toISOString().slice(0,10)};
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtDate=d=>{const[y,m,x]=d.split('-');return +x+' '+MON[m-1]+' '+y},r1=n=>Math.round(n*10)/10,sg=n=>(n>0?'+':'')+r1(n);
+const num=v=>{if(v===''||v==null)return null;const n=parseFloat(v);return isNaN(n)?null:n};
+const dayNum=d=>Date.UTC(...d.split('-').map((x,i)=>i==1?x-1:+x))/864e5;
+
+/* ===== 2. STORAGE (only place touching localStorage) ===== */
+const blank=()=>({version:1,settings:{unit:'kg',goal:null},entries:[]});
+const valid=d=>d&&typeof d==='object'&&Array.isArray(d.entries);
+function migrate(d){ // add `if(d.version<2){...}` steps here later
+ d.settings=Object.assign({unit:'kg',goal:null},d.settings);
+ d.entries=d.entries.filter(e=>e&&typeof e.weight=='number'&&/^\d{4}-\d{2}-\d{2}$/.test(e.date||'')).map(e=>({id:e.id||uid(),date:e.date,weight:e.weight,note:e.note||'',createdAt:e.createdAt||now(),updatedAt:e.updatedAt||now()}));
+ d.version=1;return d}
+function loadData(){try{const r=localStorage.getItem(KEY);if(!r)return blank();const d=JSON.parse(r);if(!valid(d))throw 0;return migrate(d)}
+ catch(e){try{localStorage.setItem(KEY+'_corrupt_backup',localStorage.getItem(KEY))}catch(_){}
+ alert('Saved data could not be read. A raw copy was kept under "'+KEY+'_corrupt_backup". Starting empty.');return blank()}}
+function saveData(){try{localStorage.setItem(KEY,JSON.stringify(S));$('#st').textContent='Saved '+new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}
+ catch(e){$('#st').textContent='SAVE FAILED: export a backup now'}}
+function exportData(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S,null,2)],{type:'application/json'}));
+ a.download='weight-tracker-backup-'+today()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),999)}
+function importData(text){let d;try{d=JSON.parse(text)}catch(e){}
+ if(!valid(d)){alert('This file does not contain valid weight tracker data.');return}
+ if(!confirm('Importing this backup may replace your current weight data. Continue?'))return;
+ S=migrate(d);saveData();go('dash')}
+
+/* ===== 3. STATISTICS ===== */
+const asc=()=>[...S.entries].sort((a,b)=>a.date.localeCompare(b.date)||a.createdAt.localeCompare(b.createdAt));
+function stats(){const e=asc();if(!e.length)return null;const l=e[e.length-1],f=e[0],ws=e.map(x=>x.weight);
+ const avg=days=>{const x=e.filter(v=>dayNum(l.date)-dayNum(v.date)<days);return r1(x.reduce((t,v)=>t+v.weight,0)/x.length)};
+ const m30=e.filter(v=>dayNum(l.date)-dayNum(v.date)<=30),sp=dayNum(l.date)-dayNum(m30[0].date);
+ return{e,l,f,prev:e[e.length-2],min:e.reduce((a,b)=>b.weight<a.weight?b:a),max:e.reduce((a,b)=>b.weight>a.weight?b:a),a7:avg(7),a30:avg(30),
+  rate:sp>=7?(l.weight-m30[0].weight)/sp*7:null}}
+const ma=(e,n=7)=>e.map((_,i)=>{const s=e.slice(Math.max(0,i-n+1),i+1);return s.reduce((t,v)=>t+v.weight,0)/s.length});
+
+/* ===== 4. CHART ===== */
+function chart(e){if(!e.length)return'<p class="m">No entries in this range.</p>';const Wd=700,H=240,L=46,R=12,u=S.settings.unit,avg=ma(e);
+ let vals=e.map(x=>x.weight);if(S.settings.goal)vals.push(S.settings.goal);let lo=Math.min(...vals)-.5,hi=Math.max(...vals)+.5;
+ const t0=dayNum(e[0].date),t1=dayNum(e[e.length-1].date),X=d=>L+(t1==t0?(Wd-L-R)/2:(dayNum(d)-t0)/(t1-t0)*(Wd-L-R)),Y=v=>H-28-(v-lo)/(hi-lo)*(H-48);
+ const g=S.settings.goal;
+ return`<svg class="chart" viewBox="0 0 ${Wd} ${H}" role="img" aria-label="Weight chart"><g stroke="#30353f">${[0,.5,1].map(k=>`<line x1="${L}" x2="${Wd-R}" y1="${Y(lo+(hi-lo)*k)}" y2="${Y(lo+(hi-lo)*k)}"/>`).join('')}</g>
+ <g fill="#8e939d" font-size="11">${[0,.5,1].map(k=>`<text x="4" y="${Y(lo+(hi-lo)*k)+4}">${r1(lo+(hi-lo)*k)}</text>`).join('')}<text x="${L}" y="${H-8}">${fmtDate(e[0].date)}</text><text x="${Wd-R}" y="${H-8}" text-anchor="end">${fmtDate(e[e.length-1].date)}</text><text x="${Wd-R}" y="12" text-anchor="end">${u}</text></g>
+ ${g?`<line x1="${L}" x2="${Wd-R}" y1="${Y(g)}" y2="${Y(g)}" stroke="#e2b765" stroke-dasharray="5 4"/><text x="${L+4}" y="${Y(g)-4}" fill="#e2b765" font-size="11">Goal ${g}</text>`:''}
+ <polyline fill="none" stroke="#8e939d" stroke-width="1.2" points="${e.map(x=>X(x.date)+','+Y(x.weight)).join(' ')}"/>
+ <polyline fill="none" stroke="#8fc79a" stroke-width="2.5" points="${e.map((x,i)=>X(x.date)+','+Y(avg[i])).join(' ')}"/>
+ ${e.map(x=>`<circle cx="${X(x.date)}" cy="${Y(x.weight)}" r="3" fill="#e8e5de"><title>${fmtDate(x.date)}: ${x.weight} ${u}${x.note?' ('+esc(x.note)+')':''}</title></circle>`).join('')}</svg>
+ <p class="m">Grey line: each entry. Green line: 7-entry moving average.</p>`}
+
+/* ===== 5. RENDERING ===== */
+const VIEWS={dash:['Dashboard',vDash],log:['Log',vLog],chart:['Chart',vChart],set:['Settings',vSettings]};
+function go(v){ui.view=v;render();scrollTo(0,0)}
+function render(){$('#nav').innerHTML=Object.entries(VIEWS).map(([k,[n]])=>`<button data-a="nav" data-v="${k}" class="${ui.view==k?'on':''}">${n}</button>`).join('');$('#main').innerHTML=VIEWS[ui.view][1]()}
+const u=()=>S.settings.unit;
+const cls=d=>d>0?'up':d<0?'down':'m';
+const addForm=()=>`<div class="box"><div class="row"><label class="f">Date<input type="date" id="nd" value="${today()}"></label>
+ <label class="f">Weight (${u()})<input type="number" step="any" inputmode="decimal" id="nw" style="width:110px" placeholder="e.g. 86.4"></label>
+ <label class="f sp">Note (optional)<input id="nn"></label><button class="pri" data-a="add">+ Add Weight</button></div></div>`;
+function vDash(){const s=stats();if(!s)return`<h2>Dashboard</h2>${addForm()}<div class="empty"><p>No weights recorded yet.</p><p class="m">Enter your first weight above.</p></div>`;
+ const g=S.settings.goal,d=s.prev?s.l.weight-s.prev.weight:null,tot=s.l.weight-s.f.weight,c=(l,v,x='')=>`<div class="box"><small>${l}</small><div class="big">${v}</div>${x}</div>`;
+ return`<h2>Dashboard</h2>${addForm()}<div class="grid" style="margin-top:12px">
+ ${c('Current',r1(s.l.weight)+' '+u(),`<span class="m">${fmtDate(s.l.date)}</span>`)}
+ ${d!=null?c('Since previous entry',`<span class="${cls(d)}">${sg(d)} ${u()}</span>`):''}
+ ${c('Since first entry',`<span class="${cls(tot)}">${sg(tot)} ${u()}</span>`,`<span class="m">started at ${r1(s.f.weight)} on ${fmtDate(s.f.date)}</span>`)}
+ ${c('7-day average',s.a7+' '+u())}${c('30-day average',s.a30+' '+u())}
+ ${s.rate!=null?c('Trend, last 30 days',`<span class="${cls(s.rate)}">${sg(s.rate)} ${u()}/week</span>`):''}
+ ${c('Lowest',r1(s.min.weight)+' '+u(),`<span class="m">${fmtDate(s.min.date)}</span>`)}${c('Highest',r1(s.max.weight)+' '+u(),`<span class="m">${fmtDate(s.max.date)}</span>`)}
+ ${g?c('Goal',g+' '+u(),`<span class="m">${r1(Math.abs(s.l.weight-g))} ${u()} ${s.l.weight>g?'to lose':s.l.weight<g?'to gain':'reached'}</span>`):''}
+ ${c('Entries',s.e.length)}</div><h4>Last 30 days</h4>${chart(s.e.filter(x=>dayNum(s.l.date)-dayNum(x.date)<=30))}`}
+function vLog(){if(!S.entries.length)return`<h2>Log</h2>${addForm()}<div class="empty"><p>No weights recorded yet.</p></div>`;
+ const rows=asc().reverse().filter(e=>(!ui.q1||e.date>=ui.q1)&&(!ui.q2||e.date<=ui.q2)),all=asc();
+ return`<h2>Log</h2>${addForm()}<div class="row" style="margin:12px 0"><label class="f">From<input type="date" data-f="q1" value="${ui.q1}"></label><label class="f">To<input type="date" data-f="q2" value="${ui.q2}"></label><button data-a="clearf">Clear filter</button></div>
+ <div class="scroll"><table><tr><th>Date</th><th>Weight (${u()})</th><th>Change</th><th>Note</th><th></th></tr>${rows.map(e=>{const i=all.indexOf(e),d=i>0?e.weight-all[i-1].weight:null;
+ return`<tr data-id="${e.id}"><td><input type="date" data-k="date" value="${e.date}" aria-label="Date"></td><td><input type="number" step="any" data-k="weight" value="${e.weight}" aria-label="Weight" style="width:90px"></td>
+ <td class="${d==null?'m':cls(d)}">${d==null?'':sg(d)}</td><td><input data-k="note" value="${esc(e.note)}" aria-label="Note"></td><td><button class="danger" data-a="del">Delete</button></td></tr>`}).join('')}</table></div>
+ ${rows.length?'':'<p class="m">No entries in this date range.</p>'}<p class="m">Edit any value directly; it saves automatically.</p>`}
+function vChart(){if(!S.entries.length)return`<h2>Chart</h2><div class="empty"><p>No weights recorded yet.</p><button class="pri" data-a="nav" data-v="dash">+ Add First Weight</button></div>`;
+ const e=asc(),l=dayNum(e[e.length-1].date),sub=ui.range?e.filter(x=>l-dayNum(x.date)<=ui.range):e;
+ return`<h2>Chart</h2><div class="row" style="margin-bottom:10px">${[[30,'30 days'],[90,'90 days'],[365,'1 year'],[0,'All']].map(([k,n])=>`<button data-a="range" data-r="${k}" class="${ui.range==k?'pri':''}">${n}</button>`).join('')}</div>${chart(sub)}`}
+function vSettings(){return`<h2>Settings and Backup</h2><div class="box"><h4 style="margin-top:0">Preferences</h4><div class="row"><label class="f">Unit<select data-s="unit"><option ${u()=='kg'?'selected':''}>kg</option><option ${u()=='lb'?'selected':''}>lb</option></select></label>
+ <label class="f">Goal weight (${u()})<input type="number" step="any" data-s="goal" style="width:120px" value="${S.settings.goal??''}" placeholder="optional"></label></div>
+ <p class="m">Changing the unit converts all saved weights (rounded to 0.1).</p></div>
+ <div class="box" style="margin-top:10px"><h4 style="margin-top:0">Backup</h4><p class="m">Your data is stored in this browser (localStorage key <code>${KEY}</code>) and stays until you clear this site's data in browser settings. Export a backup regularly.</p>
+ <div class="row"><button class="pri" data-a="export">Export Data</button><button data-a="import">Import Data</button><button data-a="example">Load Example Data</button></div></div>
+ <div class="danger-zone"><h4 style="margin-top:0;color:var(--r)">Danger zone</h4><button class="danger" data-a="wipe">Delete All Data</button></div>`}
+
+/* ===== 6. EVENTS ===== */
+const live=t=>t.tagName=='INPUT'&&!['date','checkbox'].includes(t.type);
+document.addEventListener('input',e=>{if(live(e.target))edit(e.target,false)});
+document.addEventListener('change',e=>{if(!live(e.target))edit(e.target,true)});
+function edit(t,re){const d=t.dataset;
+ if(d.f){ui[d.f]=t.value;render();return}
+ if(d.s){if(d.s=='goal')S.settings.goal=num(t.value);else if(t.value!=u()){const k=t.value=='lb'?2.20462:1/2.20462;
+   if(!confirm('Convert all saved weights to '+t.value+'?')){render();return}S.entries.forEach(x=>x.weight=r1(x.weight*k));if(S.settings.goal)S.settings.goal=r1(S.settings.goal*k);S.settings.unit=t.value}
+  saveData();if(re)render();return}
+ const row=t.closest('[data-id]');if(!row||!d.k)return;const x=S.entries.find(v=>v.id==row.dataset.id);if(!x)return;
+ if(d.k=='weight'){const n=num(t.value);if(n==null||n<=0)return;x.weight=n}else if(d.k=='date'){if(!t.value)return;x.date=t.value}else x.note=t.value;
+ x.updatedAt=now();saveData();if(re)render()}
+document.addEventListener('click',e=>{const a=e.target.closest('[data-a]');if(!a)return;
+ ({nav:()=>go(a.dataset.v),range:()=>{ui.range=+a.dataset.r;render()},clearf:()=>{ui.q1=ui.q2='';render()},
+  add:()=>{const w=num($('#nw').value),d=$('#nd').value;if(!d||w==null||w<=0){alert('Enter a date and a weight greater than 0.');return}
+   const t=now();S.entries.push({id:uid(),date:d,weight:w,note:$('#nn').value.trim(),createdAt:t,updatedAt:t});saveData();render();$('#nw').focus()},
+  del:()=>{const x=S.entries.find(v=>v.id==a.closest('[data-id]').dataset.id);if(x&&confirm('Delete the entry for '+fmtDate(x.date)+' ('+x.weight+' '+u()+')?')){S.entries=S.entries.filter(v=>v!=x);saveData();render()}},
+  'export':exportData,'import':()=>$('#file').click(),
+  example:()=>{const t=now();for(let i=0;i<60;i+=2){const d=new Date();d.setDate(d.getDate()-60+i);const ds=new Date(d-d.getTimezoneOffset()*6e4).toISOString().slice(0,10);
+    S.entries.push({id:uid(),date:ds,weight:r1(88-i*0.05+Math.sin(i)*.4),note:i==0?'Example data':'',createdAt:t,updatedAt:t})}saveData();go('dash')},
+  wipe:()=>{if(!confirm('Delete ALL weight data? This cannot be undone.'))return;if(prompt('Type DELETE to confirm.')!=='DELETE')return;S=blank();saveData();go('dash')}}[a.dataset.a]||(()=>{}))()});
+document.addEventListener('keydown',e=>{if(e.key=='Enter'&&['nw','nd','nn'].includes(e.target.id))document.querySelector('[data-a=add]').click()});
+$('#file').addEventListener('change',e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>importData(r.result);r.readAsText(f);e.target.value=''});
+
+S=loadData();saveData();render();
+</script></body></html>
